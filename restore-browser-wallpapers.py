@@ -20,9 +20,28 @@ def restore_args(renderer, screen, options, settings, adapter):
         if value is not None: args.extend([flag, str(value)])
     for key, flag in [('silent', '--silent'), ('disableMouse', '--disable-mouse'), ('disableParallax', '--disable-parallax'), ('disableParticles', '--disable-particles'), ('noAutomute', '--noautomute'), ('noAudioProcessing', '--no-audio-processing'), ('noFullscreenPause', '--no-fullscreen-pause')]:
         if options.get(key, settings.get(key, False)): args.append(flag)
+    for name, value in options.get('customProperties', {}).items():
+        args.extend(['--set-property', f'{name}={value}'])
     assets = settings.get('assetsDir')
     if assets: args.extend(['--assets-dir', assets])
     return args
+
+
+def merge_monitor_selections(active, preferences):
+    result = dict(active)
+    if not isinstance(preferences, dict):
+        return result
+    for screen, profile in preferences.items():
+        if not isinstance(profile, dict):
+            continue
+        background = profile.get('selectedWallpaper')
+        if isinstance(background, str) and background:
+            options = profile.get('options', {})
+            wallpapers = profile.get('wallpapers', {})
+            result[screen] = {**result.get(screen, {}), **options,
+                              'backgroundId': background,
+                              'customProperties': wallpapers.get(background, {})}
+    return result
 
 
 def active_screens(renderer, active, bounds, proc_root=Path('/proc')):
@@ -72,7 +91,12 @@ def restore():
     spec = spec_from_file_location('restore_adapter', Path(__file__).with_name('gnome-backend.py'))
     adapter = module_from_spec(spec); spec.loader.exec_module(adapter)
     bounds = adapter.monitors()
-    active = state.get('activeWallpapers', {})
+    active = dict(state.get('activeWallpapers', {}))
+    try:
+        preferences = json.loads((config_home() / 'wallpaper-engine/monitor-settings.json').read_text())
+    except (OSError, ValueError):
+        preferences = {}
+    active = merge_monitor_selections(active, preferences)
     present = active_screens(renderer, active, bounds)
     logdir = config_home() / 'wallpaper-engine'
     logdir.mkdir(parents=True, exist_ok=True)

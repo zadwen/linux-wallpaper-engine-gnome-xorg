@@ -36,11 +36,13 @@ class BrowserIntegrationTests(unittest.TestCase):
     def test_restore_preserves_background_path_and_monitor_settings(self):
         with tempfile.TemporaryDirectory() as temp:
             bg=Path(temp)/'wallpaper with spaces';bg.mkdir()
-            args=restore.restore_args('/renderer','DP-0',{'backgroundId':str(bg),'silent':True,'fps':45},{'assetsDir':'/Steam Library/assets','volume':30},'/adapter.py')
+            args=restore.restore_args('/renderer','DP-0',{'backgroundId':str(bg),'silent':True,'fps':45,'customProperties':{'text':'Monitor two words','enabled':'true'}},{'assetsDir':'/Steam Library/assets','volume':30},'/adapter.py')
             self.assertEqual(args[args.index('--bg')+1],str(bg))
             self.assertEqual(args[args.index('--screen-root')+1],'DP-0')
             self.assertEqual(args[args.index('--fps')+1],'45')
             self.assertIn('--silent',args)
+            self.assertIn('text=Monitor two words',args)
+            self.assertIn('enabled=true',args)
             self.assertEqual(args[args.index('--assets-dir')+1],'/Steam Library/assets')
 
     def test_restore_ignores_previews_and_only_skips_occupied_monitor(self):
@@ -55,6 +57,18 @@ class BrowserIntegrationTests(unittest.TestCase):
             self.assertEqual(restore.active_screens(renderer,active,bounds,root),set())
             command(b'0x0x1920x1080')
             self.assertEqual(restore.active_screens(renderer,active,bounds,root),{'left'})
+
+    def test_monitor_preferences_restore_independent_wallpapers_and_properties(self):
+        active = {'HDMI-0': {'backgroundId': '/one', 'fps': 30}}
+        preferences = {'DP-0': {'selectedWallpaper': '/two', 'options': {'fps': 48, 'silent': True},
+                                'wallpapers': {'/two': {'wolf': '0'}}}}
+        merged = restore.merge_monitor_selections(active, preferences)
+        self.assertEqual(merged['HDMI-0'], active['HDMI-0'])
+        self.assertEqual(merged['DP-0']['backgroundId'], '/two')
+        self.assertEqual(merged['DP-0']['customProperties'], {'wolf': '0'})
+        self.assertEqual(merged['DP-0']['fps'], 48)
+        self.assertNotIn('DP-0', active)
+        self.assertEqual(restore.merge_monitor_selections(active, []), active)
 
     def test_missing_wallpaper_is_not_restored(self):
         self.assertIsNone(restore.restore_args('/renderer','DP-0',{'backgroundId':'/missing-wallpaper-for-test'},{},'/adapter.py'))

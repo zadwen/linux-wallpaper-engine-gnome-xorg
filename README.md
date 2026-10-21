@@ -268,3 +268,7 @@ python3 check-wallpaper-compatibility.py \
 The installer also adds **Adjust wallpaper position** to the launcher's desktop
 context menu. Position settings affect framing inside the monitor; the desktop
 window remains fixed beneath icons.
+
+### Numbered monitors and independent customization
+
+The customized full browser now provides **Monitor 1 / Monitor 2** selection and independent wallpaper, FPS, sound, scaling, position, zoom, and custom property controls. Saved disconnected monitors retain their numbers and settings. See [Monitor controls and build instructions](MONITORS.md).
