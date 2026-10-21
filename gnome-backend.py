@@ -99,6 +99,26 @@ def pin(window, geometry):
     lower_desktop(window)
 
 
+def stop_renderer(child):
+    if child.poll() is None:
+        # A game may have SIGSTOPed this renderer; SIGKILL also works then.
+        child.kill()
+    child.wait()
+
+
+def reconcile(children, available):
+    """Retire old geometry; the supervisor recreates connected outputs.
+
+    Retain the requested screen names even while all outputs are disconnected,
+    so reconnecting restores their independent wallpaper settings.
+    """
+    for name, (child, geometry) in list(children.items()):
+        if available.get(name) != geometry:
+            stop_renderer(child)
+            del children[name]
+            print(f'Monitor layout changed: {name}; refreshing wallpaper', flush=True)
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == '--lower-window':
         lower_desktop(sys.argv[2])
@@ -124,51 +144,53 @@ def main():
         os.execv(backend, [backend, *original])
     available = monitors()
     inactive = [name for name in screens if name not in available]
-    screens = [name for name in screens if name in available]
     for name in inactive:
         print(f'Monitor {name!r} is not active; retaining the saved selection', file=sys.stderr)
-    if not screens:
+    if not any(name in available for name in screens) and not os.environ.get('WE_WAIT_FOR_MONITOR'):
         raise ValueError('None of the selected monitors is active')
-    children = []
+    children = {}
     def terminate(signum, frame):
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     try:
-        for name in dict.fromkeys(screens):
-            geometry = available[name]
-            environment = dict(os.environ, WE_POSITION_MONITOR=name,
-                WE_POSITION_FILE=str(Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "wallpaper-engine/positions.json"))
-            child = subprocess.Popen(
-                [backend, '--window', 'x'.join(geometry), *args],
-                preexec_fn=renderer_lifetime, env=environment)
-            children.append(child)
-            deadline = time.monotonic() + 60
-            while True:
-                if child.poll() is not None:
-                    raise RuntimeError(f'Renderer for {name} exited ({child.returncode})')
-                lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
-                window = next((line.split()[0] for line in lines
-                               if len(line.split()) >= 3 and line.split()[2] == str(child.pid)), None)
-                if window:
-                    pin(window, geometry)
-                    print(f'Wallpaper positioned on {name}: {geometry}', flush=True)
-                    break
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(f'No player window appeared for {name} within 60 seconds')
-                time.sleep(0.2)
-        while all(child.poll() is None for child in children):
-            time.sleep(0.5)
-    finally:
-        for child in children:
-            if child.poll() is None:
-                child.terminate()
-        for child in children:
+        while True:
+            reconcile(children, available)
+            for name in dict.fromkeys(screens):
+                if name not in available or name in children:
+                    continue
+                geometry = available[name]
+                environment = dict(os.environ, WE_POSITION_MONITOR=name,
+                    WE_POSITION_FILE=str(Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "wallpaper-engine/positions.json"))
+                child = subprocess.Popen(
+                    [backend, '--window', 'x'.join(geometry), *args],
+                    preexec_fn=renderer_lifetime, env=environment)
+                # Register immediately so startup failures also clean up.
+                children[name] = (child, geometry)
+                deadline = time.monotonic() + 60
+                while True:
+                    if child.poll() is not None:
+                        raise RuntimeError(f'Renderer for {name} exited ({child.returncode})')
+                    lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                    window = next((line.split()[0] for line in lines
+                                   if len(line.split()) >= 3 and line.split()[2] == str(child.pid)), None)
+                    if window:
+                        pin(window, geometry)
+                        print(f'Wallpaper positioned on {name}: {geometry}', flush=True)
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(f'No player window appeared for {name} within 60 seconds')
+                    time.sleep(0.2)
+            if any(child.poll() is not None for child, _ in children.values()):
+                break
+            time.sleep(1)
             try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+                available = monitors()
+            except subprocess.SubprocessError as exc:
+                print(f'Cannot refresh monitor layout: {exc}', file=sys.stderr)
+    finally:
+        for child, _ in children.values():
+            stop_renderer(child)
 
 
 if __name__ == '__main__':

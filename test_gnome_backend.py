@@ -36,6 +36,37 @@ class PlacementTests(unittest.TestCase):
    bridge.main()
   self.assertEqual(spawn.call_count,1)
   pin.assert_called_once_with('0x123',geometry)
+ def test_disconnect_stops_only_removed_output(self):
+  from unittest.mock import MagicMock
+  main=MagicMock(); other=MagicMock(); other.poll.return_value=None
+  geometry=('0','0','3840','2160')
+  children={'main':(main,geometry),'other':(other,('3840','0','1080','1920'))}
+  bridge.reconcile(children,{'main':geometry})
+  self.assertEqual(list(children),['main'])
+  other.kill.assert_called_once(); other.wait.assert_called_once()
+  main.kill.assert_not_called()
+ def test_layout_origin_change_recreates_renderer(self):
+  from unittest.mock import MagicMock
+  child=MagicMock(); child.poll.return_value=None
+  children={'main':(child,('1080','0','3840','2160'))}
+  bridge.reconcile(children,{'main':('0','0','3840','2160')})
+  self.assertEqual(children,{})
+  child.kill.assert_called_once()
+ def test_unchanged_layout_keeps_renderer(self):
+  from unittest.mock import MagicMock
+  child=MagicMock(); geometry=('0','0','3840','2160')
+  children={'main':(child,geometry)}
+  bridge.reconcile(children,{'main':geometry})
+  self.assertIn('main',children); child.kill.assert_not_called()
+ def test_disconnect_and_reconnect_supervisor(self):
+  from unittest.mock import MagicMock
+  child=MagicMock(); child.pid=321; child.poll.return_value=None
+  first={'main':('1080','0','3840','2160'),'other':('0','540','1080','1920')}
+  single={'main':('0','0','3840','2160')}
+  with patch.object(bridge.sys,'argv',['bridge','/backend','--screen-root','main','--screen-root','other']),patch.object(bridge,'monitors',side_effect=[first,single,first]),patch.object(bridge.subprocess,'Popen',return_value=child) as spawn,patch.object(bridge.subprocess,'check_output',return_value='0x123 0 321 host wallpaper'),patch.object(bridge,'pin'),patch.object(bridge.time,'sleep',side_effect=[None,None,KeyboardInterrupt]):
+   with self.assertRaises(KeyboardInterrupt): bridge.main()
+  geometries=[call.args[0][2] for call in spawn.call_args_list]
+  self.assertEqual(geometries,['1080x0x3840x2160','0x540x1080x1920','0x0x3840x2160','1080x0x3840x2160','0x540x1080x1920'])
  def test_invalid_monitor_does_not_launch(self):
   with patch.object(bridge.sys,'argv',['bridge','/backend','--screen-root','missing']),patch.object(bridge,'monitors',return_value={}),patch.object(bridge.subprocess,'Popen') as spawn:
    with self.assertRaises(ValueError): bridge.main()

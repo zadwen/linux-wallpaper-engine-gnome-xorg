@@ -9,4 +9,7 @@ from integration_config import backend_path
 renderer = backend_path()
 if renderer == Path(__file__).resolve():
     raise SystemExit('BINARY must point to the real renderer, not this adapter wrapper')
+# Saved browser selections may include an unplugged screen. Keep its supervisor
+# alive so it can restore the wallpaper when the monitor returns.
+os.environ['WE_WAIT_FOR_MONITOR'] = '1'
 os.execv(sys.executable, [sys.executable, str(root / 'gnome-backend.py'), str(renderer), *sys.argv[1:]])

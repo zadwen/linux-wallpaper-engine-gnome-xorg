@@ -52,3 +52,18 @@ User data remains in the normal browser settings directory. Monitor preferences 
 - Restored the original wallpaper selections, 30 FPS, custom-property defaults, and framing after testing.
 
 Actual simultaneous playback on both connected outputs was not retested while DP-0 was disconnected. Existing game pause/resume and renderer fixes remain in place. Test captures are kept locally; no desktop images or Workshop content are included in this repository.
+
+## Monitor disconnects and layout changes
+
+The GNOME adapter refreshes the XRandR layout once per second. Disconnecting
+a screen stops its renderer; moving or resizing another screen recreates its
+renderer at the new bounds. The supervisor retains the requested screen names
+and restores their wallpaper on reconnection. The browser wrapper also waits
+for saved screens that are disconnected at startup. Saved framing and per-screen
+preferences remain unchanged. A layout change can briefly reload the wallpaper.
+
+Verified on 2026-10-21: after DP-0 was turned off, HDMI-0 rendered once at
+3840x2160+0+0, replacing two overlapping windows at obsolete coordinates.
+All 53 integration tests passed, including a simulated two-screen disconnect,
+origin change, and reconnect. Physical reconnection was not exercised while
+the second display remained off.
