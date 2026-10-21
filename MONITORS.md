@@ -64,6 +64,6 @@ preferences remain unchanged. A layout change can briefly reload the wallpaper.
 
 Verified on 2026-10-21: after DP-0 was turned off, HDMI-0 rendered once at
 3840x2160+0+0, replacing two overlapping windows at obsolete coordinates.
-All 53 integration tests passed, including a simulated two-screen disconnect,
+All 54 integration tests passed, including a simulated two-screen disconnect,
 origin change, and reconnect. Physical reconnection was not exercised while
 the second display remained off.

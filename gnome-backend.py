@@ -113,7 +113,7 @@ def reconcile(children, available):
     so reconnecting restores their independent wallpaper settings.
     """
     for name, (child, geometry) in list(children.items()):
-        if available.get(name) != geometry:
+        if available.get(name) != geometry or child.poll() is not None:
             stop_renderer(child)
             del children[name]
             print(f'Monitor layout changed: {name}; refreshing wallpaper', flush=True)
@@ -170,6 +170,10 @@ def main():
                 deadline = time.monotonic() + 60
                 while True:
                     if child.poll() is not None:
+                        refreshed = monitors()
+                        if refreshed.get(name) != geometry:
+                            available = refreshed
+                            break
                         raise RuntimeError(f'Renderer for {name} exited ({child.returncode})')
                     lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
                     window = next((line.split()[0] for line in lines
@@ -181,8 +185,6 @@ def main():
                     if time.monotonic() >= deadline:
                         raise RuntimeError(f'No player window appeared for {name} within 60 seconds')
                     time.sleep(0.2)
-            if any(child.poll() is not None for child, _ in children.values()):
-                break
             time.sleep(1)
             try:
                 available = monitors()

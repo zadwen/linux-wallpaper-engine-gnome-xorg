@@ -32,13 +32,13 @@ class PlacementTests(unittest.TestCase):
   from unittest.mock import MagicMock
   child=MagicMock();child.pid=321;child.poll.side_effect=[None,0,0]
   geometry=('0','0','1920','1080')
-  with patch.object(bridge.sys,'argv',['bridge','/backend','--screen-root','missing','--screen-root','main']),patch.object(bridge,'monitors',return_value={'main':geometry}),patch.object(bridge.subprocess,'Popen',return_value=child) as spawn,patch.object(bridge.subprocess,'check_output',return_value='0x123 0 321 host wallpaper'),patch.object(bridge,'pin') as pin:
-   bridge.main()
+  with patch.object(bridge.sys,'argv',['bridge','/backend','--screen-root','missing','--screen-root','main']),patch.object(bridge,'monitors',return_value={'main':geometry}),patch.object(bridge.subprocess,'Popen',return_value=child) as spawn,patch.object(bridge.subprocess,'check_output',return_value='0x123 0 321 host wallpaper'),patch.object(bridge,'pin') as pin,patch.object(bridge.time,'sleep',side_effect=KeyboardInterrupt):
+   with self.assertRaises(KeyboardInterrupt): bridge.main()
   self.assertEqual(spawn.call_count,1)
   pin.assert_called_once_with('0x123',geometry)
  def test_disconnect_stops_only_removed_output(self):
   from unittest.mock import MagicMock
-  main=MagicMock(); other=MagicMock(); other.poll.return_value=None
+  main=MagicMock(); main.poll.return_value=None; other=MagicMock(); other.poll.return_value=None
   geometry=('0','0','3840','2160')
   children={'main':(main,geometry),'other':(other,('3840','0','1080','1920'))}
   bridge.reconcile(children,{'main':geometry})
@@ -54,7 +54,7 @@ class PlacementTests(unittest.TestCase):
   child.kill.assert_called_once()
  def test_unchanged_layout_keeps_renderer(self):
   from unittest.mock import MagicMock
-  child=MagicMock(); geometry=('0','0','3840','2160')
+  child=MagicMock(); child.poll.return_value=None; geometry=('0','0','3840','2160')
   children={'main':(child,geometry)}
   bridge.reconcile(children,{'main':geometry})
   self.assertIn('main',children); child.kill.assert_not_called()
@@ -67,6 +67,13 @@ class PlacementTests(unittest.TestCase):
    with self.assertRaises(KeyboardInterrupt): bridge.main()
   geometries=[call.args[0][2] for call in spawn.call_args_list]
   self.assertEqual(geometries,['1080x0x3840x2160','0x540x1080x1920','0x0x3840x2160','1080x0x3840x2160','0x540x1080x1920'])
+ def test_exited_renderer_is_retired_for_restart(self):
+  from unittest.mock import MagicMock
+  child=MagicMock(); child.poll.return_value=1
+  geometry=('0','0','3840','2160'); children={'main':(child,geometry)}
+  bridge.reconcile(children,{'main':geometry})
+  self.assertEqual(children,{})
+  child.wait.assert_called_once(); child.kill.assert_not_called()
  def test_invalid_monitor_does_not_launch(self):
   with patch.object(bridge.sys,'argv',['bridge','/backend','--screen-root','missing']),patch.object(bridge,'monitors',return_value={}),patch.object(bridge.subprocess,'Popen') as spawn:
    with self.assertRaises(ValueError): bridge.main()
