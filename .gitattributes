@@ -1,0 +1,3 @@
+
+# Patch payload contains context indentation; validate it against the backend tree.
+patches/*.patch -whitespace

@@ -251,6 +251,120 @@ index 0000000..282f266
 +    return source;
 +}
 +}
+diff --git a/src/WallpaperEngine/Data/Utils/WebScript.h b/src/WallpaperEngine/Data/Utils/WebScript.h
+new file mode 100644
+index 0000000..3f1ab57
+--- /dev/null
++++ b/src/WallpaperEngine/Data/Utils/WebScript.h
+@@ -0,0 +1,44 @@
++#pragma once
++#include <regex>
++#include <string>
++
++namespace WallpaperEngine::Data::Utils {
++// Older content uses JSON import assertions; Chromium 135 uses attributes.
++// Only rewrite declarations outside strings/comments, leaving authored text intact.
++inline std::string modernizeJsonImports (const std::string& source) {
++    static const std::regex declaration (
++        R"(([ \t]*import[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]+from[ \t]+["'][^"'\r\n]+["'][ \t]+)assert([ \t]*\{[ \t]*type[ \t]*:[ \t]*["']json["'][ \t]*\}[ \t]*;))");
++    std::string result;
++    char quote = 0;
++    bool blockComment = false, lineComment = false;
++    for (size_t pos = 0; pos < source.size (); ++pos) {
++        const char c = source[pos];
++        const char next = pos + 1 < source.size () ? source[pos + 1] : '\0';
++        if (!quote && !blockComment && !lineComment && (pos == 0 || source[pos - 1] == '\n')) {
++            std::match_results<std::string::const_iterator> match;
++            if (std::regex_search (source.begin () + pos, source.end (), match, declaration,
++                                  std::regex_constants::match_continuous)) {
++                result += match[1].str () + "with" + match[2].str ();
++                pos += match.length () - 1;
++                continue;
++            }
++        }
++        result += c;
++        if (quote) {
++            if (c == '\\' && pos + 1 < source.size ()) result += source[++pos];
++            else if (c == quote) quote = 0;
++        } else if (blockComment) {
++            if (c == '*' && next == '/') { result += source[++pos]; blockComment = false; }
++        } else if (lineComment) {
++            if (c == '\n') lineComment = false;
++        } else if (c == '/' && next == '*') {
++            result += source[++pos]; blockComment = true;
++        } else if (c == '/' && next == '/') {
++            result += source[++pos]; lineComment = true;
++        } else if (c == '\'' || c == '"' || c == '`') {
++            quote = c;
++        }
++    }
++    return result;
++}
++}
+diff --git a/src/WallpaperEngine/FileSystem/Adapters/Virtual.cpp b/src/WallpaperEngine/FileSystem/Adapters/Virtual.cpp
+index ecb9d7e..f1d2261 100644
+--- a/src/WallpaperEngine/FileSystem/Adapters/Virtual.cpp
++++ b/src/WallpaperEngine/FileSystem/Adapters/Virtual.cpp
+@@ -3,6 +3,7 @@
+ #include "WallpaperEngine/Assets/AssetLoadException.h"
+ 
+ #include <cstring>
++#include <sstream>
+ 
+ using namespace WallpaperEngine::FileSystem;
+ using namespace WallpaperEngine::FileSystem::Adapters;
+@@ -14,7 +15,7 @@ ReadStreamSharedPtr VirtualAdapter::open (const std::filesystem::path& path) con
+ 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
+     }
+ 
+-    return file->second;
++    return std::make_shared<std::istringstream> (file->second);
+ }
+ 
+ bool VirtualAdapter::exists (const std::filesystem::path& path) const { return this->files.contains (path); }
+@@ -24,24 +25,19 @@ std::filesystem::path VirtualAdapter::physicalPath (const std::filesystem::path&
+ }
+ 
+ void VirtualAdapter::add (const std::filesystem::path& path, const char* data) {
+-    size_t length = strlen (data);
+-    auto buffer = std::make_unique<char[]> (length);
+-    std::memcpy (buffer.get (), data, length);
+-
+-    this->add (path, std::make_shared<MemoryStream> (std::move (buffer), length));
++    this->files.insert_or_assign (path, std::string (data));
+ }
+ 
+ void VirtualAdapter::add (const std::filesystem::path& path, const JSON& data) { this->add (path, data.dump ()); }
+ 
+ void VirtualAdapter::add (const std::filesystem::path& path, const std::string& data) {
+-    auto buffer = std::make_unique<char[]> (data.size ());
+-    std::memcpy (buffer.get (), data.data (), data.size ());
+-
+-    this->add (path, std::make_shared<MemoryStream> (std::move (buffer), data.size ()));
++    this->files.insert_or_assign (path, data);
+ }
+ 
+ void VirtualAdapter::add (const std::filesystem::path& path, MemoryStreamSharedPtr stream) {
+-    this->files.insert_or_assign (path, stream);
++    stream->clear ();
++    stream->seekg (0, std::ios::beg);
++    this->files.insert_or_assign (path, std::string (std::istreambuf_iterator<char> (*stream), {}));
+ }
+ 
+ bool VirtualFactory::handlesMountpoint (const std::filesystem::path& path) const { return path.string () == "virtual"; }
+diff --git a/src/WallpaperEngine/FileSystem/Adapters/Virtual.h b/src/WallpaperEngine/FileSystem/Adapters/Virtual.h
+index 9ffe160..09d123a 100644
+--- a/src/WallpaperEngine/FileSystem/Adapters/Virtual.h
++++ b/src/WallpaperEngine/FileSystem/Adapters/Virtual.h
+@@ -27,6 +27,6 @@ struct VirtualAdapter final : Adapter {
+     void add (const std::filesystem::path& path, const std::string& data);
+     void add (const std::filesystem::path& path, MemoryStreamSharedPtr stream);
+ 
+-    std::map<std::filesystem::path, MemoryStreamSharedPtr> files;
++    std::map<std::filesystem::path, std::string> files;
+ };
+ }
+\ No newline at end of file
 diff --git a/src/WallpaperEngine/Render/CWallpaper.cpp b/src/WallpaperEngine/Render/CWallpaper.cpp
 index d0f7eab..156044a 100644
 --- a/src/WallpaperEngine/Render/CWallpaper.cpp
@@ -314,10 +428,35 @@ index 87b2b07..90186dc 100644
  };
  } // namespace WallpaperEngine::Render
 diff --git a/src/WallpaperEngine/Render/Objects/CImage.cpp b/src/WallpaperEngine/Render/Objects/CImage.cpp
-index be0baca..bea06e1 100644
+index be0baca..2d37958 100644
 --- a/src/WallpaperEngine/Render/Objects/CImage.cpp
 +++ b/src/WallpaperEngine/Render/Objects/CImage.cpp
-@@ -938,6 +938,7 @@ void CImage::render () {
+@@ -433,17 +433,21 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
+ 
+ 	constexpr size_t markerSize = 9;
+ 	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
+-	constexpr size_t vertexStride = 80;
+ 	constexpr size_t positionOffset = 0;
+-	constexpr size_t uvOffset = 72;
+ 
+ 	const std::string puppetVersion
+ 	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
+-	if (puppetVersion != "MDLV0021" && puppetVersion != "MDLV0023") {
++	if (puppetVersion != "MDLV0013" && puppetVersion != "MDLV0016"
++            && puppetVersion != "MDLV0019" && puppetVersion != "MDLV0021" && puppetVersion != "MDLV0023") {
+ 	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
+ 	    return false;
+ 	}
+ 
++        // Versions 13/16 store four bone indices/weights in a compact 52-byte
++        // vertex. Version 19 and later add tangent/normal data before the bones.
++        const size_t vertexStride = (puppetVersion == "MDLV0013" || puppetVersion == "MDLV0016") ? 52 : 80;
++        const size_t uvOffset = vertexStride - sizeof (float) * 2;
++
+ 	const size_t mdlsOffset = [&data] () -> size_t {
+ 	    for (size_t offset = markerSize; offset + strlen ("MDLS") < data.size (); offset++) {
+ 		if (std::memcmp (data.data () + offset, "MDLS", strlen ("MDLS")) == 0) {
+@@ -938,6 +942,7 @@ void CImage::render () {
  
      for (const auto end = this->m_passes.end (); cur != end; ++cur) {
  	if (std::next (cur) == end) {
@@ -387,18 +526,22 @@ index 4933440..ccf8ce3 100644
      } else {
  	sLog.error ("Unknown object type, creating placeholder, empty object: ", object.id);
 diff --git a/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp b/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
-index d174953..1251a80 100644
+index d174953..6f9bfdc 100644
 --- a/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
 +++ b/src/WallpaperEngine/Render/Wallpapers/CWeb.cpp
-@@ -2,6 +2,7 @@
+@@ -2,6 +2,11 @@
  // https://github.com/if1live/cef-gl-example
  // https://github.com/andmcgregor/cefgui
  #include "CWeb.h"
++#include <fstream>
++#include "include/cef_parser.h"
++#include "MimeTypes.h"
++#include "WallpaperEngine/Media/MediaSource.h"
 +#include "WallpaperEngine/Data/Model/Property.h"
  #include "WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.h"
  
  #include "WallpaperEngine/Data/Model/Project.h"
-@@ -17,6 +18,10 @@ CWeb::CWeb (
+@@ -17,6 +22,10 @@ CWeb::CWeb (
      const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext, WebBrowserContext& browserContext,
      const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
  ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode), m_browserContext (browserContext) {
@@ -409,7 +552,7 @@ index d174953..1251a80 100644
      // setup framebuffers
      this->setupFramebuffers ();
  
-@@ -27,7 +32,7 @@ CWeb::CWeb (
+@@ -27,7 +36,7 @@ CWeb::CWeb (
  
      CefBrowserSettings browserSettings;
      // documentaion says that 60 fps is maximum value
@@ -418,7 +561,7 @@ index d174953..1251a80 100644
  
      this->m_client = new WebBrowser::CEF::BrowserClient (m_renderHandler);
      // use the custom scheme for the wallpaper's files
-@@ -35,6 +40,29 @@ CWeb::CWeb (
+@@ -35,6 +44,29 @@ CWeb::CWeb (
  	+ "://root/" + this->getWeb ().filename;
      this->m_browser
  	= CefBrowserHost::CreateBrowserSync (window_info, this->m_client, htmlURL, browserSettings, nullptr, nullptr);
@@ -448,32 +591,63 @@ index d174953..1251a80 100644
  }
  
  void CWeb::setSize (const int width, const int height) {
-@@ -78,6 +106,16 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
+@@ -78,6 +110,46 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
      // But for now let it be like this
      //  glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
      CefDoMessageLoopWork ();
++    if (m_browser->IsLoading ()) m_lastThumbnailUrl = "<initial>";
 +    if (!m_browser->IsLoading ()) {
 +        nlohmann::json spectrum = nlohmann::json::array ();
 +        const auto& recorder = getAudioContext ().getRecorder ();
 +        // Current recorder supplies one spectrum; mirror it into WE's two channels.
 +        for (int channel = 0; channel < 2; ++channel)
 +            for (float value : recorder.audio64) spectrum.push_back (value);
++        const auto& media = getContext ().getMediaSource ().getMediaInfo ();
++        nlohmann::json events = {
++            {"Status", {{"enabled", true}}},
++            {"Properties", {{"title", media.title}, {"artist", media.artist}, {"albumTitle", media.album},
++                {"subTitle", ""}, {"albumArtist", ""}, {"genres", ""}, {"contentType", "music"}}},
++            {"Playback", {{"state", static_cast<int> (media.playbackState)}}},
++            {"Timeline", {{"position", media.position / 1000000.0}, {"duration", media.duration / 1000000.0}}}
++        };
++        const std::string artUrl = media.url.value_or ("");
++        if (artUrl != m_lastThumbnailUrl) {
++            std::string thumbnail = artUrl;
++            if (artUrl.starts_with ("file://")) {
++                const std::string path = CefURIDecode (artUrl.substr (7), true, static_cast<cef_uri_unescape_rule_t> (UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS)).ToString ();
++                std::ifstream art (path, std::ios::binary | std::ios::ate);
++                if (art && art.tellg () > 0 && art.tellg () <= 16 * 1024 * 1024) {
++                    const size_t size = static_cast<size_t> (art.tellg ());
++                    std::string bytes (size, '\0');
++                    art.seekg (0); art.read (bytes.data (), size);
++                    const char* mime = MimeTypes::getType (path.c_str ());
++                    if (art && mime && std::string (mime).starts_with ("image/"))
++                        thumbnail = "data:" + std::string (mime) + ";base64," + CefBase64Encode (bytes.data (), bytes.size ()).ToString ();
++                }
++            }
++            events["Thumbnail"] = {{"thumbnail", thumbnail}, {"primaryColor", "#202020"},
++                {"secondaryColor", "#ffffff"}, {"tertiaryColor", "#ffffff"},
++                {"textColor", "#ffffff"}, {"highContrastColor", "#ffffff"}};
++            m_lastThumbnailUrl = artUrl;
++        }
 +        m_browser->GetMainFrame ()->ExecuteJavaScript (
-+            m_propertyScript + "if (typeof window.__weAudioListener === 'function') window.__weAudioListener(" + spectrum.dump () + ");",
++            m_propertyScript + "if (typeof window.__weDispatchMedia === 'function') window.__weDispatchMedia(" + events.dump () + ");"
++            + "if (typeof window.__weAudioListener === 'function') window.__weAudioListener(" + spectrum.dump () + ");",
 +            m_browser->GetMainFrame ()->GetURL (), 0);
 +    }
  }
  
  void CWeb::updateMouse (const glm::ivec4& viewport) {
 diff --git a/src/WallpaperEngine/Render/Wallpapers/CWeb.h b/src/WallpaperEngine/Render/Wallpapers/CWeb.h
-index f27fd50..fd40c5b 100644
+index f27fd50..48f95bd 100644
 --- a/src/WallpaperEngine/Render/Wallpapers/CWeb.h
 +++ b/src/WallpaperEngine/Render/Wallpapers/CWeb.h
-@@ -49,6 +49,7 @@ private:
+@@ -49,6 +49,8 @@ private:
      CefRefPtr<WallpaperEngine::WebBrowser::CEF::BrowserClient> m_client = nullptr;
      WallpaperEngine::WebBrowser::CEF::RenderHandler* m_renderHandler = nullptr;
  
 +    std::string m_propertyScript;
++    std::string m_lastThumbnailUrl = "<initial>";
      int m_width = 16;
      int m_height = 17;
  
@@ -615,10 +789,18 @@ index b8399fa..d8261bf 100644
 \ No newline at end of file
 +}
 diff --git a/src/WallpaperEngine/Scripting/ScriptEngine.cpp b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
-index e690b92..42e105c 100644
+index e690b92..ad1a22c 100644
 --- a/src/WallpaperEngine/Scripting/ScriptEngine.cpp
 +++ b/src/WallpaperEngine/Scripting/ScriptEngine.cpp
-@@ -153,7 +153,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
+@@ -27,6 +27,7 @@
+ #include <optional>
+ #include <poll.h>
+ #include <ranges>
++#include <regex>
+ #include <signal.h>
+ #include <spawn.h>
+ #include <sstream>
+@@ -153,7 +154,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
  	    JS_FreeValue (ctx, w);
  	});
  
@@ -627,7 +809,25 @@ index e690b92..42e105c 100644
  	    sLog.exception ("Vector's x and y components must be numbers");
  	}
  
-@@ -380,14 +380,9 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
+@@ -362,6 +363,17 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
+ 	body.erase (pos, 7);
+     }
+ 
++    // Imports must stay at module scope; placing them inside the layer's
++    // closure is a syntax error. Keep QuickJS's real module loader so imported
++    // math/color functions retain their native implementation.
++    std::string imports;
++    const std::regex importDeclaration (R"((^|\n)[ \t]*(import[ \t]+[^;\n]+;))");
++    std::smatch declaration;
++    while (std::regex_search (body, declaration, importDeclaration)) {
++        imports += declaration[2].str () + "\n";
++        body.erase (static_cast<size_t> (declaration.position (2)), declaration.length (2));
++    }
++
+     // The IIFE gives every layer its own closure for top-level vars and
+     // functions, so two layers that both define `function update()` or a
+     // top-level `var scriptProperties` don't clobber each other. Lifecycle
+@@ -380,14 +392,9 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
  	<< "    get dt()          { var c = globalThis.__sceneCtx; return c ? c.dt   : 0; },\n"
  	<< "    get fps()         { var c = globalThis.__sceneCtx; return c ? c.fps  : 60; },\n"
  	<< "  };\n"
@@ -645,11 +845,23 @@ index e690b92..42e105c 100644
  	<< "  function createScriptProperties() {\n"
  	<< "    var builder = {\n"
  	<< "      addSlider:   function(o){ if (!(o.name in __props)) __props[o.name] = o.value; return builder; },\n"
+@@ -422,8 +429,9 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
+ 	<< "  };\n"
+ 	<< "})();\n";
+ 
+-    const std::string evalScript = wrapper.str ();
+-    JSValue result = JS_Eval (ctx, evalScript.c_str (), evalScript.size (), "<layer-script>", JS_EVAL_TYPE_GLOBAL);
++    const std::string evalScript = imports + wrapper.str ();
++    const std::string moduleName = "<layer-script-" + std::to_string (id) + ">";
++    JSValue result = JS_Eval (ctx, evalScript.c_str (), evalScript.size (), moduleName.c_str (), JS_EVAL_TYPE_MODULE);
+ 
+     // Unset seeds so they don't leak into the next createLayerScript call.
+     JS_SetPropertyStr (ctx, globalObj, "__layerSeedProps", JS_UNDEFINED);
 diff --git a/src/WallpaperEngine/Testing/Cases/PropertyParser.cpp b/src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
-index c0bf921..533a906 100644
+index c0bf921..84ea273 100644
 --- a/src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
 +++ b/src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
-@@ -30,4 +30,56 @@ TEST_CASE ("Directory properties are parsed as file-like properties") {
+@@ -30,4 +30,83 @@ TEST_CASE ("Directory properties are parsed as file-like properties") {
  
      REQUIRE (property != nullptr);
      CHECK (property->dump ().find ("folder - file") != std::string::npos);
@@ -707,6 +919,33 @@ index c0bf921..533a906 100644
 +        "#version 330\nout vec4 color;\nconst vec4 sampleColor() { const float amount = 1.0; return vec4(amount); }\nvoid main() { color = sampleColor(); }");
 +    CHECK_FALSE (shaders.first.empty ());
 +    CHECK_FALSE (shaders.second.empty ());
++}
++
++#include "WallpaperEngine/Data/Utils/WebScript.h"
++TEST_CASE ("Legacy web JSON import assertions use standardized attributes") {
++    using WallpaperEngine::Data::Utils::modernizeJsonImports;
++    CHECK (modernizeJsonImports ("import quotes from \"./quotes.json\" assert { type: \"json\" };\n")
++        == "import quotes from \"./quotes.json\" with { type: \"json\" };\n");
++    const std::string ordinary = "const assert = 'assert';\n// import x from 'a.json' assert {type:'json'};\nimport x from 'x.json' with {type:'json'};";
++    CHECK (modernizeJsonImports (ordinary) == ordinary);
++    const std::string literals = "/*\nimport x from 'x.json' assert {type:'json'};\n*/\nconst example = `\nimport x from 'x.json' assert {type:'json'};\n`;";
++    CHECK (modernizeJsonImports (literals) == literals);
++}
++
++#include "WallpaperEngine/FileSystem/Adapters/Virtual.h"
++TEST_CASE ("Virtual files have independent read positions on every open") {
++    WallpaperEngine::FileSystem::Adapters::VirtualAdapter files;
++    files.add ("copy.vert", "void main() {}");
++    const auto first = files.open ("copy.vert");
++    char c;
++    first->get (c);
++    CHECK (c == 'v');
++    const auto second = files.open ("copy.vert");
++    const std::string text (std::istreambuf_iterator<char> (*second), {});
++    CHECK (text == "void main() {}");
++    const std::string remainder (std::istreambuf_iterator<char> (*first), {});
++    CHECK (remainder == "oid main() {}");
++    CHECK (std::string (std::istreambuf_iterator<char> (*files.open ("copy.vert")), {}) == text);
 +}
 diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp b/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
 index 93c82ed..109a213 100644
@@ -799,7 +1038,7 @@ index fc31baa..72e9784 100644
 +GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperTexture (); }
 \ No newline at end of file
 diff --git a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
-index 7b10769..88e78a3 100644
+index 7b10769..2a55102 100644
 --- a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
 +++ b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
 @@ -5,12 +5,16 @@
@@ -821,7 +1060,7 @@ index 7b10769..88e78a3 100644
  void SubprocessApp::OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> registrar) {
      // register all the needed schemes, "wp" + the background id is going to be our scheme
      for (const auto& workshopId : this->m_handlerFactories | std::views::keys) {
-@@ -22,9 +26,15 @@ void SubprocessApp::OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> regis
+@@ -22,9 +26,64 @@ void SubprocessApp::OnRegisterCustomSchemes (CefRawPtr<CefSchemeRegistrar> regis
  }
  
  const WallpaperEngine::Application::WallpaperApplication& SubprocessApp::getApplication () const {
@@ -837,7 +1076,56 @@ index 7b10769..88e78a3 100644
 +void SubprocessApp::OnContextCreated (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 +                                      CefRefPtr<CefV8Context> context) {
 +    frame->ExecuteJavaScript (
-+        "window.wallpaperRegisterAudioListener = function(callback) { window.__weAudioListener = callback; };",
++        R"JS(
++        window.wallpaperRegisterAudioListener = function(callback) { window.__weAudioListener = callback; };
++        window.wallpaperMediaIntegration = {
++            PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2,
++            playback: {STOPPED: 0, PLAYING: 1, PAUSED: 2}
++        };
++        window.__weMediaListeners = {};
++        window.__weMediaLast = {};
++        for (const kind of ['Status', 'Properties', 'Playback', 'Timeline', 'Thumbnail']) {
++            window['wallpaperRegisterMedia' + kind + 'Listener'] = function(callback) {
++                window.__weMediaListeners[kind] = callback;
++                delete window.__weMediaLast[kind];
++            };
++        }
++        window.__weDispatchMedia = function(events) {
++            for (const [kind, event] of Object.entries(events)) {
++                const listener = window.__weMediaListeners[kind];
++                const signature = JSON.stringify(event);
++                if (typeof listener === 'function' && window.__weMediaLast[kind] !== signature) {
++                    window.__weMediaLast[kind] = signature;
++                    if (kind !== 'Thumbnail' || !event.thumbnail) {
++                        listener(event);
++                    } else {
++                        const image = new Image();
++                        image.onload = function() {
++                            const canvas = document.createElement('canvas');
++                            canvas.width = canvas.height = 1;
++                            const ctx = canvas.getContext('2d');
++                            ctx.drawImage(image, 0, 0, 1, 1);
++                            const rgb = ctx.getImageData(0, 0, 1, 1).data;
++                            event.primaryColor = 'rgb(' + Array.from(rgb).slice(0, 3).join(',') + ')';
++                            const light = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114;
++                            event.textColor = event.highContrastColor = light > 150 ? '#000000' : '#ffffff';
++                            event.secondaryColor = event.tertiaryColor = event.textColor;
++                            // Local album art is already a data URL; normalize remote art too.
++                            canvas.width = image.width; canvas.height = image.height;
++                            canvas.getContext('2d').drawImage(image, 0, 0);
++                            event.thumbnail = canvas.toDataURL('image/png');
++                            listener(event);
++                        };
++                        image.onerror = function() {
++                            console.warn('Could not load media album artwork');
++                            listener(Object.assign({}, event, {thumbnail: ''}));
++                        };
++                        image.src = event.thumbnail;
++                    }
++                }
++            }
++        };
++        )JS",
 +        frame->GetURL (), 0);
 +}
 diff --git a/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h b/src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
@@ -878,6 +1166,34 @@ index 532f1f4..dbe0114 100644
      IMPLEMENT_REFCOUNTING (SubprocessApp);
      DISALLOW_COPY_AND_ASSIGN (SubprocessApp);
  };
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+index 8f29be8..1c034b3 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+@@ -1,6 +1,8 @@
+ #include "WPSchemeHandler.h"
+ #include "WallpaperEngine/Assets/AssetLoadException.h"
+ #include <iostream>
++#include <sstream>
++#include "WallpaperEngine/Data/Utils/WebScript.h"
+ 
+ #include "MimeTypes.h"
+ #include "include/cef_parser.h"
+@@ -42,7 +44,13 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
+ 	}
+ 
+ 	this->m_contents = this->m_assetLoader.read (file);
+-	callback->Continue ();
++        if (file.ends_with (".js") || file.ends_with (".mjs")) {
++            const std::string source { std::istreambuf_iterator<char> (*this->m_contents), std::istreambuf_iterator<char> () };
++            this->m_contents = std::make_shared<std::istringstream> (
++                Data::Utils::modernizeJsonImports (source));
++        }
++        // The asset is available synchronously. With handle_request=true CEF
++        // continues directly; calling Continue too would complete it twice.
+     } catch (AssetLoadException&) {
+ #if !NDEBUG
+ 	std::cout << "Cannot read file " << file << std::endl;
 diff --git a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp b/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
 index 1b2da22..c4f0c1d 100644
 --- a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp

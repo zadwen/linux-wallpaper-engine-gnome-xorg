@@ -16,14 +16,37 @@ HELPERS = {'steam.exe', 'services.exe', 'winedevice.exe', 'plugplay.exe',
            'winedbg.exe', 'wineboot.exe', 'start.exe'}
 
 
+def process_identity(pid):
+    try:
+        proc = PROC / str(pid)
+        if proc.stat().st_uid != os.getuid():
+            return None
+        return (proc / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def include_descendants(renderers, processes):
+    result = dict(renderers)
+    pending = set(renderers)
+    while pending:
+        children = {pid: started for pid, (parent, started) in processes.items()
+                    if parent in pending and pid not in result}
+        result.update(children)
+        pending = set(children)
+    return result
+
+
 def snapshot():
-    games, renderers = set(), {}
+    games, renderers, processes = set(), {}, {}
     for proc in PROC.iterdir():
         if not proc.name.isdigit():
             continue
         try:
             if proc.stat().st_uid != os.getuid():
                 continue
+            stat = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+            processes[int(proc.name)] = (int(stat[1]), stat[19])
             cmd = (proc / 'cmdline').read_bytes()
             comm = (proc / 'comm').read_text().strip()
             args = cmd.split(b'\0')
@@ -31,7 +54,6 @@ def snapshot():
             is_wallpaper_engine = (executable == 'linux-wallpaperengine'
                                    and b'--bg' in args)
             if (RENDERER in cmd and comm == 'gjs') or is_wallpaper_engine:
-                stat = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
                 renderers[int(proc.name)] = stat[19]  # PID start time
                 continue
             env = dict(item.split(b'=', 1) for item in
@@ -47,12 +69,16 @@ def snapshot():
                 games.add(app.decode(errors='replace'))
         except (OSError, ValueError, IndexError):
             continue
-    return games, renderers
+    # CEF uses separate renderer/GPU/utility processes. Suspending just the
+    # native parent leaves those processes and their timers running.
+    return games, include_descendants(renderers, processes)
 
 
 def resume(paused, current):
     for pid, started in list(paused.items()):
-        if current.get(pid) == started:
+        # A suspended child may have become an orphan if its parent was stopped
+        # from the browser. The saved start time still safely identifies it.
+        if (current.get(pid) if pid in current else process_identity(pid)) == started:
             try:
                 os.kill(pid, signal.SIGCONT)
             except ProcessLookupError:
@@ -99,7 +125,7 @@ def main():
                         except ProcessLookupError:
                             pass
                 paused = {pid: started for pid, started in paused.items()
-                          if renderers.get(pid) == started}
+                          if process_identity(pid) == started}
             else:
                 resume(paused, renderers)
             save_paused(paused)
