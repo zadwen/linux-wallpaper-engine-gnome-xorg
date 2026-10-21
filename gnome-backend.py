@@ -89,6 +89,7 @@ def pin(window, geometry):
                     '-set', '_NET_WM_WINDOW_TYPE', '_NET_WM_WINDOW_TYPE_DESKTOP'], check=True)
     for args in [
         ['-b', 'remove,above,below'],
+        ['-b', 'remove,fullscreen'],
         ['-b', 'remove,maximized_vert,maximized_horz'],
         ['-b', 'add,sticky'],
         ['-b', 'add,skip_taskbar,skip_pager'],
@@ -113,10 +114,27 @@ def reconcile(children, available):
     so reconnecting restores their independent wallpaper settings.
     """
     for name, (child, geometry) in list(children.items()):
-        if available.get(name) != geometry or child.poll() is not None:
-            stop_renderer(child)
-            del children[name]
-            print(f'Monitor layout changed: {name}; refreshing wallpaper', flush=True)
+        desired = available.get(name)
+        if desired == geometry and child.poll() is None:
+            continue
+        if desired and desired[2:] == geometry[2:] and child.poll() is None:
+            # Position changes do not require rebuilding the GL scene. Moving
+            # the existing window avoids a blank/reload/stretch on the main
+            # monitor whenever its neighbour is switched off or on.
+            try:
+                lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                window = next((line.split()[0] for line in lines
+                               if len(line.split()) >= 3 and line.split()[2] == str(child.pid)), None)
+                if window:
+                    pin(window, desired)
+                    children[name] = (child, desired)
+            except subprocess.SubprocessError:
+                pass  # The next layout poll retries transient X11 errors.
+            continue
+        stop_renderer(child)
+        del children[name]
+        print(f'Monitor layout changed: {name}; refreshing wallpaper', flush=True)
+
 
 
 def main():
@@ -175,11 +193,21 @@ def main():
                             available = refreshed
                             break
                         raise RuntimeError(f'Renderer for {name} exited ({child.returncode})')
-                    lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                    # A hotplug can destroy an X11 window while wmctrl lists it.
+                    # wmctrl then exits nonzero; retry instead of killing every
+                    # renderer supervised by this process.
+                    try:
+                        lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                    except subprocess.SubprocessError:
+                        lines = []
                     window = next((line.split()[0] for line in lines
                                    if len(line.split()) >= 3 and line.split()[2] == str(child.pid)), None)
                     if window:
-                        pin(window, geometry)
+                        try:
+                            pin(window, geometry)
+                        except subprocess.SubprocessError:
+                            time.sleep(0.2)
+                            continue
                         print(f'Wallpaper positioned on {name}: {geometry}', flush=True)
                         break
                     if time.monotonic() >= deadline:

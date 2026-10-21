@@ -56,14 +56,22 @@ Actual simultaneous playback on both connected outputs was not retested while DP
 ## Monitor disconnects and layout changes
 
 The GNOME adapter refreshes the XRandR layout once per second. Disconnecting
-a screen stops its renderer; moving or resizing another screen recreates its
-renderer at the new bounds. The supervisor retains the requested screen names
+a screen stops its renderer; moving another screen repositions its existing
+window without reloading its scene. Resolution changes recreate the renderer
+at the new size. The supervisor retains the requested screen names
 and restores their wallpaper on reconnection. The browser wrapper also waits
 for saved screens that are disconnected at startup. Saved framing and per-screen
 preferences remain unchanged. A layout change can briefly reload the wallpaper.
 
 Verified on 2026-10-21: after DP-0 was turned off, HDMI-0 rendered once at
 3840x2160+0+0, replacing two overlapping windows at obsolete coordinates.
-All 54 integration tests passed, including a simulated two-screen disconnect,
-origin change, and reconnect. Physical reconnection was not exercised while
-the second display remained off.
+All 55 integration tests passed, including a simulated two-screen disconnect,
+origin change, and reconnect. The follow-up live on/off cycle was exercised: the HDMI renderer kept the
+same PID while moving from +0+0 to +1080+0 and back to +0+0, with
+3840x2160 dimensions unchanged. DP-0 received its own 1080x1920 renderer on
+connection and stopped on disconnection. Animation still changed afterward.
+
+Follow-up correction: remove GNOME fullscreen state before placing desktop
+windows, and retry transient `wmctrl` failures while windows disappear during
+hotplug. Regression coverage checks that origin changes preserve the renderer
+process and that a failed window listing is retried.
