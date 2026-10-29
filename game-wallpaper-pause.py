@@ -56,16 +56,16 @@ def snapshot():
             if (RENDERER in cmd and comm == 'gjs') or is_wallpaper_engine:
                 renderers[int(proc.name)] = stat[19]  # PID start time
                 continue
+            # Most desktop processes cannot be game-session markers. Avoid
+            # reading and parsing their (often large) environments every poll.
+            exe_args = [arg.decode(errors='replace').rsplit('/', 1)[-1].lower()
+                        for arg in args if arg.lower().endswith(b'.exe')]
+            if comm != 'reaper' and not any(arg not in HELPERS for arg in exe_args):
+                continue
             env = dict(item.split(b'=', 1) for item in
                        (proc / 'environ').read_bytes().split(b'\0') if b'=' in item)
             app = env.get(b'SteamGameId', env.get(b'SteamAppId', b'0'))
-            if app in IGNORE_APPS:
-                continue
-            # Steam's reaper lasts for the game session, for native and Proton games.
-            # The executable check also catches games if the wrapper has exited.
-            exe_args = [arg.decode(errors='replace').rsplit('/', 1)[-1].lower()
-                        for arg in cmd.split(b'\0') if arg.lower().endswith(b'.exe')]
-            if comm == 'reaper' or any(arg not in HELPERS for arg in exe_args):
+            if app not in IGNORE_APPS:
                 games.add(app.decode(errors='replace'))
         except (OSError, ValueError, IndexError):
             continue
@@ -87,8 +87,14 @@ def resume(paused, current):
 
 
 def save_paused(paused):
+    payload = json.dumps(paused)
+    try:
+        if STATE.read_text() == payload:
+            return
+    except FileNotFoundError:
+        pass
     temporary = STATE.with_suffix('.tmp')
-    temporary.write_text(json.dumps(paused))
+    temporary.write_text(payload)
     temporary.replace(STATE)
 
 

@@ -32,7 +32,7 @@ OUTPUT = DATA_HOME / 'backgrounds/wallpaper-engine'
 
 def monitors():
     result = {}
-    output = subprocess.check_output(['xrandr', '--query'], text=True)
+    output = subprocess.check_output(['xrandr', '--current'], text=True, timeout=3)
     for line in output.splitlines():
         match = re.match(
             r'(\S+) connected (?:primary )?(\d+)x(\d+)([+-]\d+)([+-]\d+)', line)
@@ -91,7 +91,7 @@ def renderer_arguments(pid, backend, proc_root=Path('/proc')):
 def matching_windows(active, bounds, backend):
     """Match the renderer's selection and requested geometry, then window size."""
     result = {}
-    for line in subprocess.check_output(['wmctrl', '-lpG'], text=True).splitlines():
+    for line in subprocess.check_output(['wmctrl', '-lpG'], text=True, timeout=3).splitlines():
         fields = line.split(None, 8)
         if len(fields) < 8:
             continue

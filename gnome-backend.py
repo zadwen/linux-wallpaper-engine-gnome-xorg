@@ -28,7 +28,7 @@ def renderer_lifetime():
 
 
 def monitors():
-    output = subprocess.check_output(['xrandr', '--query'], text=True)
+    output = subprocess.check_output(['xrandr', '--current'], text=True, timeout=3)
     found = {}
     for line in output.splitlines():
         match = re.match(r'(\S+) connected (?:primary )?(\d+)x(\d+)([+-]\d+)([+-]\d+)', line)
@@ -122,7 +122,7 @@ def reconcile(children, available):
             # the existing window avoids a blank/reload/stretch on the main
             # monitor whenever its neighbour is switched off or on.
             try:
-                lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                lines = subprocess.check_output(['wmctrl', '-lp'], text=True, timeout=3).splitlines()
                 window = next((line.split()[0] for line in lines
                                if len(line.split()) >= 3 and line.split()[2] == str(child.pid)), None)
                 if window:
@@ -197,7 +197,7 @@ def main():
                     # wmctrl then exits nonzero; retry instead of killing every
                     # renderer supervised by this process.
                     try:
-                        lines = subprocess.check_output(['wmctrl', '-lp'], text=True).splitlines()
+                        lines = subprocess.check_output(['wmctrl', '-lp'], text=True, timeout=3).splitlines()
                     except subprocess.SubprocessError:
                         lines = []
                     window = next((line.split()[0] for line in lines

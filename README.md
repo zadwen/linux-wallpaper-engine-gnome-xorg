@@ -272,3 +272,13 @@ window remains fixed beneath icons.
 ### Numbered monitors and independent customization
 
 The customized full browser now provides **Monitor 1 / Monitor 2** selection and independent wallpaper, FPS, sound, scaling, position, zoom, and custom property controls. Saved disconnected monitors retain their numbers and settings. See [Monitor controls and build instructions](MONITORS.md).
+
+
+### Display-wake resilience
+
+Display queries use `xrandr --current` to avoid repeated connector probes and
+have a three-second timeout, as do wallpaper window-list queries. This bounds
+supervisor stalls during display power transitions. The pause watcher reads
+process environments only for game candidates and writes recovery state only
+when it changes. These measures reduce background overhead; they do not prove
+or repair a kernel, GPU-driver, or hardware lockup.

@@ -49,3 +49,33 @@ class PauseTreeTests(unittest.TestCase):
     def test_descendant_cycles_cannot_loop_forever(self):
         self.assertEqual(pause.include_descendants({10: 'a'}, {10: (11, 'a'), 11: (10, 'b')}),
                          {10: 'a', 11: 'b'})
+
+
+class PollingCostTests(unittest.TestCase):
+    def test_unchanged_recovery_state_is_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / 'paused.json'
+            with patch.object(pause, 'STATE', state):
+                pause.save_paused({10: '100'})
+                before = state.stat().st_mtime_ns
+                pause.save_paused({10: '100'})
+                self.assertEqual(state.stat().st_mtime_ns, before)
+                pause.save_paused({})
+                self.assertEqual(state.read_text(), '{}')
+
+    def test_native_game_marker_still_detected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for pid, comm in [(10, 'reaper'), (11, 'desktop')]:
+                proc = root / str(pid)
+                proc.mkdir()
+                stat = ['0'] * 20
+                stat[0], stat[1], stat[19] = 'S', '1', str(pid)
+                (proc / 'stat').write_text(f'{pid} ({comm}) ' + ' '.join(stat))
+                (proc / 'cmdline').write_bytes(comm.encode())
+                (proc / 'comm').write_text(comm)
+                # A normal desktop process has no readable environment here.
+                if comm == 'reaper':
+                    (proc / 'environ').write_bytes(b'SteamAppId=12345\0')
+            with patch.object(pause, 'PROC', root):
+                self.assertEqual(pause.snapshot()[0], {'12345'})

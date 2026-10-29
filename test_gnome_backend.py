@@ -7,8 +7,9 @@ bridge=importlib.util.module_from_spec(spec);spec.loader.exec_module(bridge)
 class PlacementTests(unittest.TestCase):
  def test_monitor_coordinates(self):
   layout='HDMI-0 connected primary 1920x1080+1920+0 (normal)\nHDMI-1-2 connected 1920x1080+0+0 (normal)\nDP-0 disconnected\n'
-  with patch.object(bridge.subprocess,'check_output',return_value=layout):
+  with patch.object(bridge.subprocess,'check_output',return_value=layout) as query:
    self.assertEqual(bridge.monitors(),{'HDMI-0':('1920','0','1920','1080'),'HDMI-1-2':('0','0','1920','1080')})
+   query.assert_called_once_with(['xrandr','--current'],text=True,timeout=3)
  def test_negative_monitor_coordinates(self):
   layout='DP-0 connected primary 1920x1080-1920+0 (normal)\nHDMI-0 connected 1080x1920+0-540 (normal)\n'
   with patch.object(bridge.subprocess,'check_output',return_value=layout):
